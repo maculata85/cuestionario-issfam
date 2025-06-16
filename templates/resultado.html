@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head><title>Resultado</title></head>
+<body>
+  <h2>Resultados del Examen</h2>
+  <p>Respuestas correctas: {{ correctas }} de {{ total }}</p>
+  <p>Porcentaje: {{ porcentaje|round(2) }}%</p>
+  <p>Vidas restantes: {{ vidas }}</p>
+
+  {% if temas %}
+    <h3>Temas a repasar:</h3>
+    <ul>
+      {% for tema in temas %}
+        <li>{{ tema }}</li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p>¡Felicidades! No tienes temas que repasar.</p>
+  {% endif %}
+
+  <a href="/">Volver a empezar</a>
+</body>
+</html>
