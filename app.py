@@ -41,6 +41,10 @@ def examen():
     """
     Ruta para iniciar el examen, procesa la selección de dificultad y prepara la sesión.
     """
+    # --- IMPORTANTE: Limpiar la sesión al inicio de un nuevo examen ---
+    # Esto asegura que no se arrastren estados de juegos anteriores
+    session.clear() 
+
     dificultad = request.form['dificultad']
     preguntas = preparar_examen(dificultad)
     vidas = DIFICULTADES[dificultad]
@@ -67,6 +71,8 @@ def mostrar_pregunta():
     indice_pregunta_actual = session.get('indice_pregunta_actual', 0)
 
     # --- Validación inicial de sesión para robustez ---
+    # Si los datos esenciales de la sesión no están, redirigir al inicio.
+    # Esto puede ocurrir si la sesión caduca o el usuario accede directamente.
     if preguntas is None or vidas is None or dificultad_actual is None:
         flash('La sesión del examen ha expirado o no se ha iniciado. Por favor, comienza de nuevo.', 'warning')
         return redirect(url_for('inicio'))
@@ -79,6 +85,7 @@ def mostrar_pregunta():
             flash('Por favor, selecciona una opción antes de responder.', 'warning')
             return redirect(url_for('mostrar_pregunta'))
 
+        # Usamos el índice actual para obtener la pregunta que se acaba de responder
         pregunta_respondida_obj = preguntas[indice_pregunta_actual]
         correcta = pregunta_respondida_obj['opciones'][pregunta_respondida_obj['respuesta_correcta']]
 
@@ -104,31 +111,42 @@ def mostrar_pregunta():
 
         # VERIFICACIÓN DE FIN DE EXAMEN DESPUÉS DE PROCESAR LA RESPUESTA
         # Y AVANZAR AL SIGUIENTE ÍNDICE.
-        # Si las vidas son NEGATIVAS (ej. Modo Dios se equivocó en la primera)
-        # o ya no hay más preguntas.
+        # Si las vidas son NEGATIVAS (Modo Dios se equivocó en la primera y sus vidas pasaron de 0 a -1)
+        # o si ya no hay más preguntas para mostrar.
         if vidas < 0 or siguiente_indice >= len(preguntas):
             return redirect(url_for('resultado'))
         else:
             return redirect(url_for('mostrar_pregunta'))
 
     # --- Lógica para mostrar la pregunta actual (si la solicitud es GET) ---
-    # VERIFICACIÓN DE FIN DE EXAMEN AL CARGAR LA PÁGINA VÍA GET (ej. recargar o navegar directamente)
     #
-    # Redirigir a 'resultado' si:
-    # 1. Ya no hay más preguntas que mostrar (se llegó al final).
-    # 2. Las vidas son 0 o menos Y NO ES EL MODO DIOS O YA SE HA RESPONDIDO AL MENOS UNA PREGUNTA.
-    #    Esto permite que el Modo Dios con 0 vidas inicie la primera pregunta.
-    if indice_pregunta_actual >= len(preguntas) or \
-       (vidas <= 0 and dificultad_actual != 'dios' and indice_pregunta_actual > 0) or \
-       (vidas <= 0 and dificultad_actual == 'dios' and indice_pregunta_actual > 0): # redundante pero explicativo
+    # IMPORTANTE: Esta condición se activa cuando el navegador hace un GET
+    # (ya sea la primera carga, recarga, o navegación hacia atrás/adelante).
+    #
+    # Redirigir a 'resultado' SI:
+    # 1. Ya no hay más preguntas para mostrar (el índice excede el total de preguntas).
+    # 2. Las vidas son 0 o menos Y NO ES EL MODO DIOS inicial (es decir, las vidas se agotaron durante el juego normal)
+    #    O si es Modo Dios y ya se ha procesado al menos una pregunta (indice_pregunta_actual > 0)
+    #    y las vidas son <= 0 (es decir, se equivocó).
+
+    # Condición más limpia para redirigir a resultados en GET:
+    # Si ya no quedan preguntas O si las vidas se agotaron.
+    # El caso especial del Modo Dios (0 vidas iniciales) se maneja porque 'vidas <= 0'
+    # solo lleva a 'resultado' si ya no hay preguntas OR si las vidas son negativas (después de un error).
+    # O, para modos normales, si las vidas son 0 y el índice es > 0 (es decir, ya ha jugado).
+    # La clave es NO redirigir si vidas es 0 y indice_pregunta_actual es 0 (primera carga de Modo Dios).
+
+    # Primero, verificamos si se agotaron las preguntas (siempre va a resultados si es así)
+    if indice_pregunta_actual >= len(preguntas):
         return redirect(url_for('resultado'))
 
-    # Si se llegó a 0 vidas en modo normal (no Dios) en la primera pregunta (indice 0),
-    # también se debe redirigir a resultados.
-    if vidas <= 0 and dificultad_actual != 'dios' and indice_pregunta_actual == 0:
+    # Luego, verificamos el estado de las vidas.
+    # Si las vidas son <= 0, y NO ES EL MODO DIOS en la PRIMERA PREGUNTA (indice 0), entonces va a resultados.
+    # Si es Modo Dios con 0 vidas e indice 0, *NO* redirige, permite que se muestre la primera pregunta.
+    if vidas <= 0 and not (dificultad_actual == 'dios' and indice_pregunta_actual == 0):
         return redirect(url_for('resultado'))
 
-    # Preparar la pregunta para mostrar
+    # Si llegamos aquí, significa que la sesión es válida y debemos mostrar una pregunta.
     pregunta_a_mostrar = preguntas[indice_pregunta_actual]
     opciones = pregunta_a_mostrar['opciones'][:]
     random.shuffle(opciones)
@@ -156,6 +174,7 @@ def resultado():
     porcentaje = (correctas / total) * 100 if total > 0 else 0
 
     # Limpiar la sesión al finalizar el examen para que no arrastre datos viejos
+    # Aunque session.clear() en /examen ayuda, esto es un buen resguardo.
     session.pop('preguntas', None)
     session.pop('respuestas', None)
     session.pop('vidas', None)
