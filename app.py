@@ -1,10 +1,11 @@
 # app.py
-from flask import Flask, render_template, request, redirect, url_for, session
+from flask import Flask, render_template, request, redirect, url_for, session, flash # Importamos 'flash'
+
 import random
 from base_de_preguntas import BASE_DE_PREGUNTAS
 
 app = Flask(__name__)
-app.secret_key = 'clave_secreta_cambia_esto'
+app.secret_key = 'clave_secreta_cambia_esto' # ¡IMPORTANTE! Cambia esto por una clave secreta fuerte y única en producción
 
 NUM_PREGUNTAS_EXAMEN = 15
 
@@ -17,8 +18,11 @@ DIFICULTADES = {
 }
 
 def preparar_examen(dificultad):
+    """
+    Filtra y selecciona las preguntas para el examen según la dificultad.
+    """
     if dificultad == 'todos':
-        preguntas = BASE_DE_PREGUNTAS[:]
+        preguntas = BASE_DE_PREGUNTAS[:] # Copia completa si es "todos"
     else:
         preguntas = [p for p in BASE_DE_PREGUNTAS if p['dificultad'] == dificultad]
 
@@ -27,52 +31,114 @@ def preparar_examen(dificultad):
 
 @app.route('/')
 def inicio():
+    """
+    Ruta para la página de inicio, donde se selecciona la dificultad.
+    """
     return render_template('inicio.html')
 
 @app.route('/examen', methods=['POST'])
 def examen():
+    """
+    Ruta para iniciar el examen, procesa la selección de dificultad y prepara la sesión.
+    """
     dificultad = request.form['dificultad']
     preguntas = preparar_examen(dificultad)
     vidas = DIFICULTADES[dificultad]
 
+    # Inicializa las variables de sesión para el nuevo examen
     session['preguntas'] = preguntas
     session['respuestas'] = []
     session['vidas'] = vidas
-    session['dificultad'] = dificultad
-    return redirect(url_for('mostrar_pregunta', num=0))
+    session['dificultad'] = dificultad # Guardamos la dificultad para usarla en el template de examen
+    session['indice_pregunta_actual'] = 0 # Nuevo: Almacena el índice de la pregunta actual
 
-@app.route('/pregunta/<int:num>', methods=['GET', 'POST'])
-def mostrar_pregunta(num):
+    # Redirige a la primera pregunta
+    return redirect(url_for('mostrar_pregunta'))
+
+@app.route('/pregunta', methods=['GET', 'POST'])
+def mostrar_pregunta():
+    """
+    Ruta para mostrar una pregunta y procesar su respuesta.
+    """
     preguntas = session.get('preguntas')
     respuestas = session.get('respuestas', [])
     vidas = session.get('vidas')
+    dificultad_actual = session.get('dificultad')
+    indice_pregunta_actual = session.get('indice_pregunta_actual', 0) # Obtener el índice actual
 
+    # --- Validación inicial de sesión para robustez ---
+    # Si los datos esenciales de la sesión no están, redirigir al inicio
+    if preguntas is None or vidas is None or dificultad_actual is None:
+        flash('La sesión del examen ha expirado o no se ha iniciado. Por favor, comienza de nuevo.', 'warning')
+        return redirect(url_for('inicio'))
+
+    # --- Lógica de procesamiento de respuesta (si la solicitud es POST) ---
     if request.method == 'POST':
-        seleccion = request.form['opcion']
-        correcta = preguntas[num - 1]['opciones'][preguntas[num - 1]['respuesta_correcta']]
+        seleccion = request.form.get('opcion') # Usar .get para evitar KeyError si 'opcion' no existe
+
+        # Validación si no se seleccionó ninguna opción (aunque 'required' en HTML ayuda)
+        if seleccion is None:
+            flash('Por favor, selecciona una opción antes de responder.', 'warning')
+            return redirect(url_for('mostrar_pregunta')) # Volver a mostrar la misma pregunta
+
+        # La pregunta que se acaba de responder es la del indice_pregunta_actual
+        pregunta_respondida_obj = preguntas[indice_pregunta_actual]
+        correcta = pregunta_respondida_obj['opciones'][pregunta_respondida_obj['respuesta_correcta']]
+
         if seleccion != correcta:
             vidas -= 1
             session['vidas'] = vidas
+            flash(f'¡Incorrecto! La respuesta correcta era: {correcta}', 'error')
+        else:
+            flash('¡Correcto!', 'success')
+
+        # Almacenar la información de la respuesta
         respuestas.append({
-            'pregunta': preguntas[num - 1]['pregunta'],
+            'pregunta': pregunta_respondida_obj['pregunta'],
             'seleccion': seleccion,
             'correcta': correcta,
-            'tema': preguntas[num - 1]['tema'],
+            'tema': pregunta_respondida_obj['tema'],
             'acertada': seleccion == correcta
         })
         session['respuestas'] = respuestas
 
-    if vidas == 0 or num >= len(preguntas):
+        # --- Lógica de avance a la siguiente pregunta o fin del examen ---
+        siguiente_indice = indice_pregunta_actual + 1
+        session['indice_pregunta_actual'] = siguiente_indice # Actualizar el índice en la sesión
+
+        # Verificar si el examen terminó (vidas agotadas o todas las preguntas respondidas)
+        if vidas <= 0 or siguiente_indice >= len(preguntas):
+            return redirect(url_for('resultado'))
+        else:
+            # Redirigir a la misma ruta '/pregunta' que ahora cargará la siguiente pregunta
+            return redirect(url_for('mostrar_pregunta'))
+
+    # --- Lógica para mostrar la pregunta actual (si la solicitud es GET) ---
+    # Verificar si el examen ya debería haber terminado si se llega vía GET (ej. recargar la página)
+    if vidas <= 0 or indice_pregunta_actual >= len(preguntas):
         return redirect(url_for('resultado'))
 
-    opciones = preguntas[num]['opciones'][:]
+    # Preparar la pregunta para mostrar
+    pregunta_a_mostrar = preguntas[indice_pregunta_actual]
+    opciones = pregunta_a_mostrar['opciones'][:]
     random.shuffle(opciones)
-    return render_template('examen.html', num=num, total=len(preguntas),
-                           pregunta=preguntas[num]['pregunta'],
-                           opciones=opciones, tema=preguntas[num]['tema'], vidas=vidas)
+
+    # Renderizar la plantilla de la pregunta, pasando los datos necesarios
+    return render_template('examen.html',
+                           num=indice_pregunta_actual, # Usamos 'num' para el índice en el template
+                           total=len(preguntas),
+                           pregunta=pregunta_a_mostrar['pregunta'],
+                           opciones=opciones,
+                           tema=pregunta_a_mostrar['tema'],
+                           vidas=vidas,
+                           dificultad_actual=dificultad_actual,
+                           DIFICULTADES=DIFICULTADES) # Pasamos el diccionario completo
 
 @app.route('/resultado')
 def resultado():
+    """
+    Ruta para mostrar los resultados finales del examen.
+    """
     respuestas = session.get('respuestas', [])
     vidas = session.get('vidas', 0)
     total = len(respuestas)
@@ -80,80 +146,15 @@ def resultado():
     temas = sorted(set(r['tema'] for r in respuestas if not r['acertada']))
     porcentaje = (correctas / total) * 100 if total > 0 else 0
 
+    # Limpiar la sesión al finalizar el examen para que no arrastre datos viejos
+    session.pop('preguntas', None)
+    session.pop('respuestas', None)
+    session.pop('vidas', None)
+    session.pop('dificultad', None)
+    session.pop('indice_pregunta_actual', None)
+
     return render_template('resultado.html', correctas=correctas, total=total,
                            vidas=vidas, porcentaje=porcentaje, temas=temas)
 
 if __name__ == '__main__':
     app.run(debug=True)
-
-
-# templates/inicio.html
-'''
-<!DOCTYPE html>
-<html>
-<head><title>Inicio</title></head>
-<body>
-  <h2>Cuestionario de la Ley del ISSFAM</h2>
-  <form method="POST" action="/examen">
-    <label>Elige dificultad:</label><br>
-    <select name="dificultad">
-      <option value="facil">Fácil</option>
-      <option value="intermedio">Intermedio</option>
-      <option value="dificil">Difícil</option>
-      <option value="dios">Dios</option>
-      <option value="todos">Todos</option>
-    </select><br><br>
-    <button type="submit">Iniciar Examen</button>
-  </form>
-</body>
-</html>
-'''
-
-
-# templates/examen.html
-'''
-<!DOCTYPE html>
-<html>
-<head><title>Pregunta {{ num+1 }}</title></head>
-<body>
-  <h2>Pregunta {{ num+1 }} de {{ total }}</h2>
-  <p><strong>Tema:</strong> {{ tema }}</p>
-  <p>{{ pregunta }}</p>
-  <form method="POST">
-    {% for opcion in opciones %}
-      <label><input type="radio" name="opcion" value="{{ opcion }}" required> {{ opcion }}</label><br>
-    {% endfor %}
-    <br><button type="submit">Responder</button>
-  </form>
-  <p>Vidas restantes: {{ vidas }}</p>
-</body>
-</html>
-'''
-
-
-# templates/resultado.html
-'''
-<!DOCTYPE html>
-<html>
-<head><title>Resultado</title></head>
-<body>
-  <h2>Resultados del Examen</h2>
-  <p>Respuestas correctas: {{ correctas }} de {{ total }}</p>
-  <p>Porcentaje: {{ porcentaje|round(2) }}%</p>
-  <p>Vidas restantes: {{ vidas }}</p>
-
-  {% if temas %}
-    <h3>Temas a repasar:</h3>
-    <ul>
-      {% for tema in temas %}
-        <li>{{ tema }}</li>
-      {% endfor %}
-    </ul>
-  {% else %}
-    <p>¡Felicidades! No tienes temas que repasar.</p>
-  {% endif %}
-
-  <a href="/">Volver a empezar</a>
-</body>
-</html>
-'''
