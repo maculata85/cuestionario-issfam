@@ -1,5 +1,5 @@
 # app.py
-from flask import Flask, render_template, request, redirect, url_for, session, flash # Importamos 'flash'
+from flask import Flask, render_template, request, redirect, url_for, session, flash
 
 import random
 from base_de_preguntas import BASE_DE_PREGUNTAS
@@ -13,7 +13,7 @@ DIFICULTADES = {
     'facil': 3,
     'intermedio': 2,
     'dificil': 1,
-    'dios': 0,
+    'dios': 0, # Modo Dios: 0 vidas
     'todos': 2
 }
 
@@ -49,8 +49,8 @@ def examen():
     session['preguntas'] = preguntas
     session['respuestas'] = []
     session['vidas'] = vidas
-    session['dificultad'] = dificultad # Guardamos la dificultad para usarla en el template de examen
-    session['indice_pregunta_actual'] = 0 # Nuevo: Almacena el índice de la pregunta actual
+    session['dificultad'] = dificultad
+    session['indice_pregunta_actual'] = 0 # Almacena el índice de la pregunta actual
 
     # Redirige a la primera pregunta
     return redirect(url_for('mostrar_pregunta'))
@@ -64,24 +64,21 @@ def mostrar_pregunta():
     respuestas = session.get('respuestas', [])
     vidas = session.get('vidas')
     dificultad_actual = session.get('dificultad')
-    indice_pregunta_actual = session.get('indice_pregunta_actual', 0) # Obtener el índice actual
+    indice_pregunta_actual = session.get('indice_pregunta_actual', 0)
 
     # --- Validación inicial de sesión para robustez ---
-    # Si los datos esenciales de la sesión no están, redirigir al inicio
     if preguntas is None or vidas is None or dificultad_actual is None:
         flash('La sesión del examen ha expirado o no se ha iniciado. Por favor, comienza de nuevo.', 'warning')
         return redirect(url_for('inicio'))
 
     # --- Lógica de procesamiento de respuesta (si la solicitud es POST) ---
     if request.method == 'POST':
-        seleccion = request.form.get('opcion') # Usar .get para evitar KeyError si 'opcion' no existe
+        seleccion = request.form.get('opcion')
 
-        # Validación si no se seleccionó ninguna opción (aunque 'required' en HTML ayuda)
         if seleccion is None:
             flash('Por favor, selecciona una opción antes de responder.', 'warning')
-            return redirect(url_for('mostrar_pregunta')) # Volver a mostrar la misma pregunta
+            return redirect(url_for('mostrar_pregunta'))
 
-        # La pregunta que se acaba de responder es la del indice_pregunta_actual
         pregunta_respondida_obj = preguntas[indice_pregunta_actual]
         correcta = pregunta_respondida_obj['opciones'][pregunta_respondida_obj['respuesta_correcta']]
 
@@ -92,7 +89,6 @@ def mostrar_pregunta():
         else:
             flash('¡Correcto!', 'success')
 
-        # Almacenar la información de la respuesta
         respuestas.append({
             'pregunta': pregunta_respondida_obj['pregunta'],
             'seleccion': seleccion,
@@ -106,16 +102,30 @@ def mostrar_pregunta():
         siguiente_indice = indice_pregunta_actual + 1
         session['indice_pregunta_actual'] = siguiente_indice # Actualizar el índice en la sesión
 
-        # Verificar si el examen terminó (vidas agotadas o todas las preguntas respondidas)
-        if vidas <= 0 or siguiente_indice >= len(preguntas):
+        # VERIFICACIÓN DE FIN DE EXAMEN DESPUÉS DE PROCESAR LA RESPUESTA
+        # Y AVANZAR AL SIGUIENTE ÍNDICE.
+        # Si las vidas son NEGATIVAS (ej. Modo Dios se equivocó en la primera)
+        # o ya no hay más preguntas.
+        if vidas < 0 or siguiente_indice >= len(preguntas):
             return redirect(url_for('resultado'))
         else:
-            # Redirigir a la misma ruta '/pregunta' que ahora cargará la siguiente pregunta
             return redirect(url_for('mostrar_pregunta'))
 
     # --- Lógica para mostrar la pregunta actual (si la solicitud es GET) ---
-    # Verificar si el examen ya debería haber terminado si se llega vía GET (ej. recargar la página)
-    if vidas <= 0 or indice_pregunta_actual >= len(preguntas):
+    # VERIFICACIÓN DE FIN DE EXAMEN AL CARGAR LA PÁGINA VÍA GET (ej. recargar o navegar directamente)
+    #
+    # Redirigir a 'resultado' si:
+    # 1. Ya no hay más preguntas que mostrar (se llegó al final).
+    # 2. Las vidas son 0 o menos Y NO ES EL MODO DIOS O YA SE HA RESPONDIDO AL MENOS UNA PREGUNTA.
+    #    Esto permite que el Modo Dios con 0 vidas inicie la primera pregunta.
+    if indice_pregunta_actual >= len(preguntas) or \
+       (vidas <= 0 and dificultad_actual != 'dios' and indice_pregunta_actual > 0) or \
+       (vidas <= 0 and dificultad_actual == 'dios' and indice_pregunta_actual > 0): # redundante pero explicativo
+        return redirect(url_for('resultado'))
+
+    # Si se llegó a 0 vidas en modo normal (no Dios) en la primera pregunta (indice 0),
+    # también se debe redirigir a resultados.
+    if vidas <= 0 and dificultad_actual != 'dios' and indice_pregunta_actual == 0:
         return redirect(url_for('resultado'))
 
     # Preparar la pregunta para mostrar
@@ -123,16 +133,15 @@ def mostrar_pregunta():
     opciones = pregunta_a_mostrar['opciones'][:]
     random.shuffle(opciones)
 
-    # Renderizar la plantilla de la pregunta, pasando los datos necesarios
     return render_template('examen.html',
-                           num=indice_pregunta_actual, # Usamos 'num' para el índice en el template
+                           num=indice_pregunta_actual,
                            total=len(preguntas),
                            pregunta=pregunta_a_mostrar['pregunta'],
                            opciones=opciones,
                            tema=pregunta_a_mostrar['tema'],
                            vidas=vidas,
                            dificultad_actual=dificultad_actual,
-                           DIFICULTADES=DIFICULTADES) # Pasamos el diccionario completo
+                           DIFICULTADES=DIFICULTADES)
 
 @app.route('/resultado')
 def resultado():
